@@ -3,7 +3,7 @@
 ///<license>
 ///This software is distributed under the BSD license.
 ///
-///Copyright (c) 2019, Primoz Gabrijelcic
+///Copyright (c) 2026, Primoz Gabrijelcic
 ///All rights reserved.
 ///
 ///Redistribution and use in source and binary forms, with or without modification,
@@ -36,18 +36,28 @@
 ///   Contributors      : GJ, Lee_Nover, scarre, Sean B. Durkin
 ///
 ///   Creation date     : 2011-08-31
-///   Last modification : 2018-02-26
-///   Version           : 1.0b
+///   Last modification : 2026-04-15
+///   Version           : 1.02
 ///</para><para>
 ///   History:
+///     1.02: 2026-04-15
+///       - Fixed: OTL_HasTThreadCurrentThread ifdefs were dead code, preventing
+///         SetThreadDescription (Windows 10+ thread naming API) from being loaded.
+///         Removed the guards since TThread.CurrentThread is always available.
+///       - Fixed: FreeLibrary was called on a handle obtained via GetModuleHandle
+///         (which does not increment the reference count). Removed the incorrect
+///         FreeLibrary call.
+///     1.01: 2026-03-18
+///       - On Windows, SetThreadName also calls SetThreadDescription API
+///         if it is available.
 ///     1.0b: 2018-02-26
 ///       - Semantics of OTL_DontSetThreadName was reversed.
 ///     1.0a: 2017-11-28
 ///       - Did not include OtlOptions.inc
 ///     1.0: 2011-08-31
-///       - [Lee_Nover] SetThreadName implementation moved here. Disabled debug info for
-///         the unit. That way, debugger doesn't stop on SetThreadName while 
-///         single-stepping in another thread.
+///       - [Lee_Nover] SetThreadName implementation moved here. Disabled
+///         debug info for the unit. That way, debugger doesn't stop on
+///         SetThreadName while single-stepping in another thread.
 ///</para></remarks>
 
 unit OtlCommon.Utils;
@@ -63,13 +73,20 @@ implementation
 
 {$IFDEF OTL_HasNameThreadForDebugging}
 uses
+  Windows,
   Classes;
 {$ELSE ~OTL_HasNameThreadForDebugging}
-{$IFDEF MSWINDOWS}
 uses
   Windows;
-{$ENDIF MSWINDOWS}
 {$ENDIF ~OTL_HasNameThreadForDebugging}
+
+{$IFDEF OTL_HasNameThreadForDebugging}
+type
+  TSetThreadDescription = function(hThread: THandle; threadDescription: PWideChar): HRESULT; stdcall;
+
+var
+  GSetThreadDescription: TSetThreadDescription;
+{$ENDIF OTL_HasNameThreadForDebugging}
 
 threadvar
   LastThreadName: string[255];
@@ -92,11 +109,13 @@ begin
     Exit;
 
   TThread.NameThreadForDebugging({$IFDEF OTL_NameThreadHasStringParameter}name{$ELSE}ansiName{$ENDIF});
+  if assigned(GSetThreadDescription) then
+    GSetThreadDescription(TThread.CurrentThread.Handle, PChar(name));
+
   LastThreadName := ansiName;
 end; { SetThreadName }
 
 {$ELSE ~OTL_HasNameThreadForDebugging}
-{$IFDEF MSWINDOWS}
 {$WARN SYMBOL_PLATFORM OFF}
 
 procedure SetThreadName(const name: string);
@@ -127,14 +146,11 @@ begin
 end; { SetThreadName }
 
 {$WARN SYMBOL_PLATFORM ON}
-{$ELSE ~MSWINDOWS}
-
-procedure SetThreadName(const name: string);
-begin
-end; { SetThreadName }
-
-{$ENDIF ~MSWINDOWS}
 {$ENDIF ~OTL_HasNameThreadForDebugging}
 {$ENDIF ~OTL_DontSetThreadName}
 
+{$IFDEF OTL_HasNameThreadForDebugging}
+initialization
+  GSetThreadDescription := GetProcAddress(GetModuleHandle('kernel32.dll'), 'SetThreadDescription');
+{$ENDIF OTL_HasNameThreadForDebugging}
 end.
