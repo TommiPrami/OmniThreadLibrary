@@ -36,10 +36,13 @@
 ///   Contributors      : GJ, Lee_Nover, Sean B. Durkin
 ///
 ///   Creation date     : 2008-06-12
-///   Last modification : 2025-05-06
-///   Version           : 1.11a
+///   Last modification : 2026-10-08
+///   Version           : 1.11b
 ///</para><para>
 ///   History:
+///     1.11b: 2026-10-08
+///       - Fixed: TOmniEventMonitor.Destroy raised an access violation (hiding the original
+///         error) when the constructor failed in DSiAllocateHWnd (issue #24, #213).
 ///     1.11a: 2025-05-06
 ///       - Use correct time-measurement functions.
 ///     1.11: 2018-03-16
@@ -231,12 +234,17 @@ var
   intfKV   : TOmniInterfaceDictionaryPair;
   winHandle: THandle;
 begin
-  for intfKV in emMonitoredTasks do
-    (intfKV.Value as IOmniTaskControl).RemoveMonitor;
-  emMonitoredTasks.Clear;
-  for intfKV in emMonitoredPools do
-    (intfKV.Value as IOmniThreadPool).RemoveMonitor;
-  emMonitoredPools.Clear;
+  // The constructor may have failed (DSiAllocateHWnd) before the dictionaries were created.
+  if assigned(emMonitoredTasks) then begin
+    for intfKV in emMonitoredTasks do
+      (intfKV.Value as IOmniTaskControl).RemoveMonitor;
+    emMonitoredTasks.Clear;
+  end;
+  if assigned(emMonitoredPools) then begin
+    for intfKV in emMonitoredPools do
+      (intfKV.Value as IOmniThreadPool).RemoveMonitor;
+    emMonitoredPools.Clear;
+  end;
   if emMessageWindow <> 0 then begin
     winHandle := emMessageWindow;
     emMessageWindow := 0;
@@ -298,7 +306,7 @@ var
     rearmSelf: boolean = true): boolean;
   begin
     Result := true;
-    while task.Comm.Receive(emCurrentMsg) do begin
+    while (task.Comm as IOmniCommunicationEndpointInternal).ReceiveAny(emCurrentMsg) do begin
       if (not (task as IOmniTaskControlInternals).FilterMessage(emCurrentMsg)) and
          assigned(emOnTaskMessage)
       then
@@ -344,11 +352,11 @@ begin { TOmniEventMonitor.WndProc }
       if Supports(emMonitoredTasks.ValueOf(GetUniqueID(msg)), IOmniTaskControl, Task) then
       begin
         endpoint := (task as IOmniTaskControlSharedInfo).SharedInfo.CommChannel.Endpoint1;
-        while endpoint.Receive(emCurrentMsg) do
+        while (endpoint as IOmniCommunicationEndpointInternal).ReceiveAny(emCurrentMsg) do
           if Assigned(emOnTaskMessage) then
             emOnTaskMessage(task, emCurrentMsg);
         endpoint := (task as IOmniTaskControlSharedInfo).SharedInfo.CommChannel.Endpoint2;
-        while endpoint.Receive(emCurrentMsg) do
+        while (endpoint as IOmniCommunicationEndpointInternal).ReceiveAny(emCurrentMsg) do
           if Assigned(emOnTaskUndeliveredMessage) then
             emOnTaskUndeliveredMessage(task, emCurrentMsg);
         emCurrentMsg.MsgData._ReleaseAndClear;

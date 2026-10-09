@@ -35,10 +35,24 @@
 ///     Blog            : http://thedelphigeek.com
 ///   Contributors      : GJ, Lee_Nover, scarre, Sean B. Durkin, HHasenack
 ///   Creation date     : 2008-06-12
-///   Last modification : 2026-04-15
-///   Version           : 1.56a
+///   Last modification : 2026-10-08
+///   Version           : 1.56d
 ///</para><para>
 ///   History:
+///     1.56d: 2026-10-08
+///       - TOmniValue.SetAsTValue supports objects (tkClass). Parallel.ForEach<T> over an
+///         enumerable whose enumerator returns objects, e.g. TListView.Items, failed (issue #176).
+///     1.56c: 2026-10-08
+///       - Fixed: TOmniValue.CastTo<TOmniValue> raised 'TOmniValue cannot be converted to
+///         record'. This broke Parallel.ForEach<TOmniValue> (issue #49).
+///     1.56b: 2026-09-16
+///       - Fixed: TOmniEnvironment.LoadNUMAInfo ignored the result of
+///         DSiGetLogicalProcessorInfoEx and only handled the "API not present"
+///         failure case (GetLastError = ERROR_NOT_SUPPORTED). Any other failure
+///         left ProcessorGroups/NUMANodes silently empty instead of raising,
+///         which could later crash TOTPWorkerScheduler.CreateInitialClusters.
+///         Now raises an exception with the OS error code/message for any
+///         other failure.
 ///     1.56a: 2026-04-15
 ///       - Fixed: TOmniValue._ReleaseAndClear did not check assigned(ovIntf) before
 ///         calling ovIntf._Release, causing AV when type was interfaced but pointer nil.
@@ -2380,6 +2394,7 @@ end; { TOmniValue.ToRecord }
 function TOmniValue.CastTo<T>: T;
 var
   ds      : integer;
+  pResult : ^TOmniValue;
   maxValue: uint64;
   ti      : PTypeInfo;
 {$IFDEF OTL_TypeInfoHasTypeData}
@@ -2390,6 +2405,11 @@ var
 begin
   ds := 0;
   ti := System.TypeInfo(T);
+  if ti = System.TypeInfo(TOmniValue) then begin
+    pResult := @Result;
+    pResult^ := Self;
+    Exit;
+  end;
   if assigned(ti) then
     if (ti = System.TypeInfo(byte)) or (ti = System.TypeInfo(shortint)) then
       ds := 1
@@ -3272,6 +3292,8 @@ begin
       AsInterface := value.AsInterface;
     tkInt64:
       AsInt64 := value.AsInt64;
+    tkClass:
+      AsObject := value.AsObject; // not owned by the TOmniValue
     tkPointer:
     begin
       Assert(SizeOf(pointer) <= SizeOf(int64));
@@ -4308,10 +4330,14 @@ var
   pGroupInfo             : PProcessorGroupInfo;
   processorGroupsInternal: IOmniProcessorGroupsInternal;
   procInfo               : TSystemLogicalProcessorInformationExArr;
+  succeeded              : boolean;
 begin
-  DSiGetLogicalProcessorInfoEx(DSiWin32._LOGICAL_PROCESSOR_RELATIONSHIP.RelationAll, procInfo);
-  if GetLastError = ERROR_NOT_SUPPORTED then
+  succeeded := DSiGetLogicalProcessorInfoEx(DSiWin32._LOGICAL_PROCESSOR_RELATIONSHIP.RelationAll, procInfo);
+  if (not succeeded) and (GetLastError = ERROR_NOT_SUPPORTED) then
     CreateFakeNUMAInfo
+  else if not succeeded then
+    raise Exception.CreateFmt('TOmniEnvironment.LoadNUMAInfo: DSiGetLogicalProcessorInfoEx failed with [%d] %s',
+      [GetLastError, SysErrorMessage(GetLastError)])
   else begin
     numaNodesInternal := (oeNUMANodes as IOmniNUMANodesInternal);
     processorGroupsInternal := (oeProcessorGroups as IOmniProcessorGroupsInternal);

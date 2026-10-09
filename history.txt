@@ -1,6 +1,12 @@
 3.09: <<unreleased>>
 
 - Changes:
+  - DSiWin32: new define DSiNoTimerResolution prevents DSiWin32 (and so
+    every program using OmniThreadLibrary) from raising the Windows timer
+    resolution to 1 ms with timeBeginPeriod(1) for the whole lifetime of the
+    process (issue #68). The default behaviour is unchanged; without the
+    1 ms resolution Sleep(1) and short timeouts are rounded up to the system
+    timer tick (about 15.6 ms). OTL-NG never changes the resolution.
   - Removed all POSIX/non-Windows support (mobile, Linux, OSX, Android,
     iOS). OmniThreadLibrary now targets Windows only; cross-platform
     support lives in the OmniThreadLibrary-NG project. This drops the
@@ -35,6 +41,12 @@
     - TOmniBaseBoundedStack.Empty was not protected by Acquire/Release.
     - TOmniValueQueue.IsEmpty was missing try/finally around the
       critical section.
+    - Destroying a TOmniValueQueue that still contained items raised an
+      access violation (issue #201).
+    - TOmniBaseQueue relied on the memory manager for the alignment of its
+      head/tail pointers; alignment assertions failed with memory managers
+      that don't return 16-byte aligned blocks, e.g. madExcept's leak
+      tracking on x64 (issue #177).
   - OtlCommon:
     - _ReleaseAndClear did not check assigned(ovIntf) before _Release.
     - TOmniValueContainer.Grow off-by-one skipped the last element.
@@ -44,6 +56,10 @@
       has.
     - TOmniProcessorGroups.FindGroup assumed group number equals list
       index.
+  - OtlComm: ReceiveWait lost a message (and SendWait sent it twice) if an
+    empty wake-up was followed by a successful dequeue/enqueue in the same
+    call; this could hang thread pool workers and Parallel.For (issue #228,
+    PR #230 by Oleksiy Penkov).
   - OtlParallel:
     - Fixed PInteger used instead of PNativeInt in pipeline stage
       dispatch (only low 32 bits checked on 64-bit).
@@ -76,6 +92,59 @@
       spin-lock block (use-after-free).
     - TOmniLockManager.Lock no longer passes a negative wait_ms as
       cardinal to WaitForSingleObject.
+    - TWaitFor with 64 or more handles crashed the process: callbacks could
+      still run after UnregisterWait and read a cleared list, and a wait
+      could fire while the list was still being filled. Now uses
+      UnregisterWaitEx and builds the list under FAwaitedLock (issue #227,
+      PR #229 by Oleksiy Penkov).
+  - OtlTaskControl: Unobserved raised 'Task can be only monitored with a
+    single monitor' when the task was already monitored with MonitorWith.
+    This made Parallel.Join, For, ForEach, Future and Pipeline fail (or
+    hang) when their task config used MonitorWith (issue #154).
+    Parallel.Async still cannot be combined with MonitorWith.
+  - OtlCommon: TOmniValue.CastTo<TOmniValue> raised 'TOmniValue cannot be
+    converted to record', which broke Parallel.ForEach<TOmniValue> (issue
+    #49).
+  - OtlParallel: exceptions raised in the body of Parallel.For and
+    Parallel.ForEach (including the Into and Aggregate variants) hung
+    ForEach and were silently lost in For. They are now collected and
+    raised in the calling thread as EJoinException after all tasks have
+    stopped (not when NoWait is used), the same way Parallel.Join works.
+    ForEach tasks stop taking new elements after a failure (issue #57).
+  - OtlEventMonitor: TOmniEventMonitor.Destroy raised an access violation,
+    hiding the original error, when the constructor failed to allocate
+    its window (issue #24).
+  - OtlParallel: Parallel.For/ForEach waited forever in the loop destructor
+    if a task could not be created or started (e.g. no window handles were
+    left for the internal task monitor); the error is now raised to the
+    caller of Execute (issue #213).
+  - OtlTaskControl: tasks created with an internal monitor (Unobserved,
+    handlers; everything Parallel.* creates) from a thread other than the
+    main thread were never released, as their termination is signalled
+    through a window message that nobody processed in such a thread. This
+    caused a steady memory growth with nested Parallel.Async, Pipeline
+    and For (issues #78, #69, #152). A non-main thread now processes the
+    pending messages of its internal monitor whenever it creates the next
+    internal monitor. The main thread must still process messages (a GUI
+    application does; a console program must pump them).
+  - OtlContainerObserver: a worker task raised ERROR_NOT_ENOUGH_QUOTA when
+    the message queue of the monitoring thread stayed full (10,000 messages)
+    for more than ~5 seconds, e.g. because the GUI thread was stalled by
+    swapping. The observer now waits up to 60 seconds (issue #182).
+  - OtlCommon: TOmniValue.SetAsTValue did not support objects, which broke
+    Parallel.ForEach<T> over enumerables returning objects, e.g.
+    TListView.Items (issue #176).
+  - OtlComm: Receive and ReceiveWait returned OTL's internal messages (the
+    calls of methods passed to IOmniTaskControl.Run/Invoke) to the user
+    code, which swallowed them so that the methods were never executed.
+    They are put back into the queue now. OTL reads all messages with the
+    internal IOmniCommunicationEndpointInternal.ReceiveAny (issue #50).
+  - OtlParallel: a Parallel.ForEach(...).NoWait loop over a blocking
+    collection could hang the process when the program released its last
+    reference to the collection before the loop had finished (the loop
+    referenced the collection without owning it). The loop now keeps the
+    source of a ForEach(IOmniValueEnumerable / IOmniBlockingCollection)
+    alive until its tasks have stopped.
   - OtlSync.Utils: TObjectDictionary in TOmniSynchronizer<T> now created
     with [doOwnsValues], fixing a TEvent leak.
   - OtlThreadPool: GlobalOmniThreadPool lazy initialization is now
@@ -98,6 +167,10 @@
       holding MonitorLock, so a task controller being destroyed on another
       thread cannot close (and let the OS recycle) the handle in the window
       before SetEvent. Reported by NoAnyName.
+  - DSiWin32: DSiTimeGetTime64 and DSiAllocateHwnd crashed when called from
+    a thread that outlived the unit finalization (typically the thread pool
+    maintenance timer at application shutdown), because the global critical
+    sections were already deleted (issue #224).
   - OtlCommon.Utils: SetThreadDescription (Windows 10+ thread naming) was
     dead code behind an obsolete IFDEF; also removed an incorrect
     FreeLibrary on a GetModuleHandle handle.
